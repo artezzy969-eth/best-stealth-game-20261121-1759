@@ -10,8 +10,9 @@
 
 import { Warden, angleDiff } from './guard.js';
 
+export const TILE = 32;
 export const WORLD_WIDTH = 960;
-export const WORLD_HEIGHT = 600;
+export const WORLD_HEIGHT = 608;
 
 const PLAYER_RADIUS = 11;
 const WALK_SPEED = 132; // px/s standing
@@ -20,12 +21,18 @@ const CATCH_DIST = 20; // guard touches the player while alerted
 const NOISE_WALK_RADIUS = 78; // px; crouching is silent
 const NOISE_HEAR_RADIUS = 150; // guards hear a noise only this close
 
-function asPxRect(rect) {
-  return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+// Level data is in tile units; the engine works in pixels.
+function toPxRect(rect, tile) {
+  return {
+    x: rect.x * tile,
+    y: rect.y * tile,
+    w: rect.w * tile,
+    h: rect.h * tile,
+  };
 }
 
-function asPxPoint(point) {
-  return { x: point.x, y: point.y };
+function toPxPoint(point, tile) {
+  return { x: (point.x + 0.5) * tile, y: (point.y + 0.5) * tile };
 }
 
 export function pointInRect(x, y, rect) {
@@ -117,15 +124,18 @@ export function guardSeesPlayer(game, guard) {
 }
 
 export function createGame(levelDef, levelIndex, rng) {
-  // Level geometry is already in pixel units (world 960x600).
-  const walls = (levelDef.walls || []).map(asPxRect);
-  const crates = (levelDef.crates || []).map(asPxRect);
-  const bushes = (levelDef.bushes || []).map(asPxRect);
-  const shadows = (levelDef.shadows || []).map(asPxRect);
-  const start = asPxPoint(levelDef.playerStart || { x: 60, y: 520 });
-  const exit = asPxRect(levelDef.exit || { x: 884, y: 40, w: 44, h: 44 });
+  // Level geometry is in tile units (TILE = 32 px, world 30x19).
+  const tile = TILE;
+  const cols = levelDef.cols || 30;
+  const rows = levelDef.rows || 19;
+  const walls = (levelDef.walls || []).map((r) => toPxRect(r, tile));
+  const crates = (levelDef.crates || []).map((r) => toPxRect(r, tile));
+  const bushes = (levelDef.bushes || []).map((r) => toPxRect(r, tile));
+  const shadows = (levelDef.shadows || []).map((r) => toPxRect(r, tile));
+  const start = toPxPoint(levelDef.playerStart || { x: 1, y: 16 }, tile);
+  const exit = toPxRect(levelDef.exit || { x: 27, y: 1, w: 2, h: 2 }, tile);
   const intel = (levelDef.intel || []).map((p) => {
-    const pt = asPxPoint(p);
+    const pt = toPxPoint(p, tile);
     return { ...pt, label: p.label || 'Parcel', taken: false, bob: rng ? rng.range(0, Math.PI * 2) : 0 };
   });
 
@@ -133,10 +143,11 @@ export function createGame(levelDef, levelIndex, rng) {
     levelDef,
     levelIndex,
     levelName: levelDef.name || `Level ${levelIndex + 1}`,
-    cols: 0,
-    rows: 0,
-    w: levelDef.width || WORLD_WIDTH,
-    h: levelDef.height || WORLD_HEIGHT,
+    tile,
+    cols,
+    rows,
+    w: cols * tile,
+    h: rows * tile,
     seed: levelDef.seed || 1,
     walls,
     crates,
@@ -157,7 +168,7 @@ export function createGame(levelDef, levelIndex, rng) {
       speed: 0,
       stepPhase: 0,
     },
-    guards: (levelDef.guards || []).map((def) => new Warden(def, 1)),
+    guards: (levelDef.guards || []).map((def) => new Warden(def, tile)),
     time: 0,
     score: 0,
     status: 'playing', // playing | level-complete | caught | win

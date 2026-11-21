@@ -1,4 +1,4 @@
-// art.js — original canvas-drawn art for "Night Shift".
+// art.js — original canvas-drawn art for "Shadow Courier".
 // Every sprite here is drawn with canvas paths at run time: no image
 // files, no external assets, nothing copied. B2's render.js imports the
 // draw* helpers below and calls them each frame; the helpers never keep

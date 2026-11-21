@@ -1,4 +1,4 @@
-// audio.js — WebAudio-only sound for "Night Shift".
+// audio.js — WebAudio-only sound for "Shadow Courier".
 // No audio files, no network: every sound is synthesized with
 // oscillators and filtered noise at run time. All sound goes through
 // one master gain so the game can mute with a single call.

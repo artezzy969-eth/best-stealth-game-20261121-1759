@@ -104,6 +104,11 @@ function drawMinimap(ctx, game) {
 // is drawn underneath every DOM screen so screenshots stay readable.
 export function renderGame(ctx, game, screen) {
   const time = game.time;
+  // art.js's floor is painted for a 960x600 sheet while the world is
+  // 960x608; pre-fill the whole canvas so the bottom strip is floor,
+  // not transparent page background.
+  ctx.fillStyle = '#20262f';
+  ctx.fillRect(0, 0, game.w, game.h);
   // drawLevelBase draws floor, shadows, bushes, intel, exit, crates and
   // walls from the level data — but it would draw already-taken parcels,
   // so pass it the level with only the parcels still on the floor.

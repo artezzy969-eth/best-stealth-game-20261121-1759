@@ -4,12 +4,11 @@
 // mouse input, DOM HUD + screen wiring exactly as index.html's hook
 // contract specifies, timer + score, WebAudio hooks, and the two
 // play-test APIs: window.ShadowCourier (B1's contract) and window.__game
-// (screenshot shot states). Levels come from ./levels.js (static import,
-// as agreed with the level author); three small built-in fallback levels
-// in the same pixel format are used only if LEVELS arrives empty.
+// (screenshot shot states). Levels come from ./levels.js via loadLevels()
+// below; three small built-in fallback levels in the same tile format
+// are used only if LEVELS arrives empty.
 // This file never writes levels.js itself.
 
-import { LEVELS } from './levels.js';
 import { createGame, updateGame } from './engine.js';
 import { createInput } from './input.js';
 import { makeRng } from './random.js';
@@ -22,132 +21,157 @@ import {
   startAmbient,
 } from './audio.js';
 
-// --- Fallback levels (same pixel format as levels.js) --------------------
-// Used only when ./levels.js exports an empty LEVELS array.
+// --- Fallback levels (same tile format as levels.js) --------------------
+// Used only when ./levels.js is absent or exports an empty LEVELS array.
 const FALLBACK_LEVELS = [
   {
     name: 'Vault',
     seed: 101,
+    cols: 30,
+    rows: 19,
     brief: 'Opening night. Two wardens walk the floor.',
     hint: 'Crouch in shadow. Crates block sight.',
-    parTime: 90,
-    playerStart: { x: 60, y: 520 },
-    exit: { x: 884, y: 40, w: 44, h: 44 },
+    par: 90,
+    playerStart: { x: 1, y: 16 },
+    exit: { x: 27, y: 1, w: 2, h: 2 },
     walls: [
-      { x: 0, y: 0, w: 960, h: 16 }, { x: 0, y: 584, w: 960, h: 16 },
-      { x: 0, y: 0, w: 16, h: 600 }, { x: 944, y: 0, w: 16, h: 600 },
-      { x: 430, y: 120, w: 100, h: 24 }, { x: 430, y: 456, w: 100, h: 24 },
+      { x: 0, y: 0, w: 30, h: 1 }, { x: 0, y: 18, w: 30, h: 1 },
+      { x: 0, y: 0, w: 1, h: 19 }, { x: 29, y: 0, w: 1, h: 19 },
+      { x: 13, y: 4, w: 3, h: 1 }, { x: 13, y: 14, w: 3, h: 1 },
     ],
     crates: [
-      { x: 220, y: 180, w: 56, h: 56 }, { x: 560, y: 300, w: 56, h: 56 },
-      { x: 260, y: 470, w: 56, h: 56 },
+      { x: 7, y: 6, w: 2, h: 2 }, { x: 17, y: 9, w: 2, h: 2 },
+      { x: 8, y: 15, w: 2, h: 2 },
     ],
-    bushes: [{ x: 400, y: 250, w: 90, h: 70 }],
-    shadows: [{ x: 120, y: 90, w: 130, h: 90 }, { x: 620, y: 430, w: 150, h: 90 }],
+    bushes: [{ x: 12, y: 8, w: 3, h: 2 }],
+    shadows: [{ x: 4, y: 3, w: 4, h: 3 }, { x: 19, y: 13, w: 5, h: 3 }],
     intel: [
-      { x: 500, y: 300, label: 'Floor plan' },
-      { x: 880, y: 520, label: 'Key code' },
+      { x: 15, y: 9, label: 'Floor plan' },
+      { x: 27, y: 16, label: 'Key code' },
     ],
     guards: [
       {
         name: 'Mara',
-        waypoints: [{ x: 480, y: 100 }, { x: 480, y: 500 }, { x: 200, y: 500 }, { x: 200, y: 100 }],
-        speed: 62, coneRange: 190, coneAngleDeg: 68, pauseMs: 900, phase: 0,
+        seed: 11,
+        waypoints: [[12, 3], [12, 17], [5, 17], [5, 3]],
+        speed: 62, range: 190, halfAngle: 0.593, pause: 0.9, phase: 0,
       },
       {
         name: 'Ivo',
-        waypoints: [{ x: 820, y: 120 }, { x: 820, y: 480 }, { x: 600, y: 480 }, { x: 600, y: 120 }],
-        speed: 55, coneRange: 175, coneAngleDeg: 64, pauseMs: 1200, phase: 0.5,
+        seed: 23,
+        waypoints: [[19, 15], [19, 6], [26, 6], [26, 15]],
+        speed: 55, range: 175, halfAngle: 0.559, pause: 1.2, phase: 0.5,
       },
     ],
   },
   {
     name: 'Archive',
     seed: 202,
+    cols: 30,
+    rows: 19,
     brief: 'Three wardens, tighter shelves.',
     hint: 'Bushes hide you completely while crouched.',
-    parTime: 105,
-    playerStart: { x: 60, y: 60 },
-    exit: { x: 884, y: 516, w: 44, h: 44 },
+    par: 105,
+    playerStart: { x: 1, y: 2 },
+    exit: { x: 27, y: 16, w: 2, h: 2 },
     walls: [
-      { x: 0, y: 0, w: 960, h: 16 }, { x: 0, y: 584, w: 960, h: 16 },
-      { x: 0, y: 0, w: 16, h: 600 }, { x: 944, y: 0, w: 16, h: 600 },
-      { x: 200, y: 150, w: 220, h: 22 }, { x: 540, y: 430, w: 220, h: 22 },
+      { x: 0, y: 0, w: 30, h: 1 }, { x: 0, y: 18, w: 30, h: 1 },
+      { x: 0, y: 0, w: 1, h: 19 }, { x: 29, y: 0, w: 1, h: 19 },
+      { x: 6, y: 5, w: 7, h: 1 }, { x: 17, y: 13, w: 7, h: 1 },
     ],
     crates: [
-      { x: 90, y: 220, w: 52, h: 52 }, { x: 820, y: 250, w: 52, h: 52 },
-      { x: 120, y: 480, w: 52, h: 52 },
+      { x: 3, y: 7, w: 2, h: 2 }, { x: 26, y: 8, w: 2, h: 2 },
+      { x: 4, y: 15, w: 2, h: 2 },
     ],
-    bushes: [{ x: 430, y: 180, w: 100, h: 70 }],
-    shadows: [{ x: 330, y: 60, w: 140, h: 70 }, { x: 60, y: 330, w: 110, h: 100 }],
+    bushes: [{ x: 13, y: 6, w: 3, h: 2 }],
+    shadows: [{ x: 10, y: 2, w: 4, h: 2 }, { x: 2, y: 10, w: 3, h: 3 }],
     intel: [
-      { x: 480, y: 230, label: 'Catalogue' },
-      { x: 320, y: 520, label: 'Ledger' },
-      { x: 880, y: 90, label: 'Cipher' },
+      { x: 15, y: 7, label: 'Catalogue' },
+      { x: 10, y: 16, label: 'Ledger' },
+      { x: 27, y: 3, label: 'Cipher' },
     ],
     guards: [
       {
         name: 'Mara',
-        waypoints: [{ x: 320, y: 90 }, { x: 320, y: 540 }, { x: 90, y: 540 }, { x: 90, y: 90 }],
-        speed: 66, coneRange: 195, coneAngleDeg: 70, pauseMs: 800, phase: 0,
+        seed: 11,
+        waypoints: [[16, 2], [16, 17], [3, 17], [3, 2]],
+        speed: 66, range: 195, halfAngle: 0.611, pause: 0.8, phase: 0,
       },
       {
         name: 'Ivo',
-        waypoints: [{ x: 640, y: 90 }, { x: 640, y: 540 }, { x: 480, y: 540 }, { x: 480, y: 90 }],
-        speed: 60, coneRange: 185, coneAngleDeg: 66, pauseMs: 1000, phase: 0.33,
+        seed: 23,
+        waypoints: [[25, 17], [24, 17], [24, 3], [25, 3]],
+        speed: 60, range: 185, halfAngle: 0.576, pause: 1.0, phase: 0.33,
       },
       {
         name: 'Sable',
-        waypoints: [{ x: 880, y: 200 }, { x: 880, y: 420 }, { x: 760, y: 420 }, { x: 760, y: 200 }],
-        speed: 72, coneRange: 200, coneAngleDeg: 72, pauseMs: 700, phase: 0.66,
+        seed: 37,
+        waypoints: [[24, 13], [24, 6], [28, 6], [28, 13]],
+        speed: 72, range: 200, halfAngle: 0.628, pause: 0.7, phase: 0.66,
       },
     ],
   },
   {
     name: 'Rooftops',
     seed: 303,
+    cols: 30,
+    rows: 19,
     brief: 'Fast wardens, long sightlines, thin cover.',
     hint: 'Shadows are your only real cover up here.',
-    parTime: 120,
-    playerStart: { x: 60, y: 520 },
-    exit: { x: 884, y: 40, w: 44, h: 44 },
+    par: 120,
+    playerStart: { x: 1, y: 16 },
+    exit: { x: 27, y: 1, w: 2, h: 2 },
     walls: [
-      { x: 0, y: 0, w: 960, h: 16 }, { x: 0, y: 584, w: 960, h: 16 },
-      { x: 0, y: 0, w: 16, h: 600 }, { x: 944, y: 0, w: 16, h: 600 },
-      { x: 240, y: 180, w: 180, h: 24 }, { x: 540, y: 396, w: 180, h: 24 },
+      { x: 0, y: 0, w: 30, h: 1 }, { x: 0, y: 18, w: 30, h: 1 },
+      { x: 0, y: 0, w: 1, h: 19 }, { x: 29, y: 0, w: 1, h: 19 },
+      { x: 7, y: 6, w: 6, h: 1 }, { x: 17, y: 12, w: 6, h: 1 },
     ],
     crates: [
-      { x: 150, y: 120, w: 52, h: 52 }, { x: 770, y: 430, w: 52, h: 52 },
+      { x: 5, y: 4, w: 2, h: 2 }, { x: 24, y: 13, w: 2, h: 2 },
     ],
-    bushes: [{ x: 300, y: 300, w: 90, h: 60 }],
-    shadows: [{ x: 90, y: 240, w: 110, h: 120 }, { x: 400, y: 470, w: 160, h: 70 }],
+    bushes: [{ x: 9, y: 9, w: 3, h: 2 }],
+    shadows: [{ x: 3, y: 7, w: 3, h: 4 }, { x: 12, y: 15, w: 5, h: 2 }],
     intel: [
-      { x: 480, y: 300, label: 'Roof key' },
-      { x: 90, y: 90, label: 'Blueprint' },
-      { x: 880, y: 520, label: 'Manifest' },
+      { x: 15, y: 11, label: 'Roof key' },
+      { x: 3, y: 3, label: 'Blueprint' },
+      { x: 27, y: 16, label: 'Manifest' },
     ],
     guards: [
       {
         name: 'Mara',
-        waypoints: [{ x: 480, y: 80 }, { x: 480, y: 520 }, { x: 120, y: 520 }, { x: 120, y: 80 }],
-        speed: 78, coneRange: 215, coneAngleDeg: 74, pauseMs: 600, phase: 0,
+        seed: 11,
+        waypoints: [[13, 2], [13, 16], [4, 16], [4, 2]],
+        speed: 78, range: 215, halfAngle: 0.646, pause: 0.6, phase: 0,
       },
       {
         name: 'Ivo',
-        waypoints: [{ x: 840, y: 80 }, { x: 840, y: 520 }, { x: 620, y: 520 }, { x: 620, y: 80 }],
-        speed: 74, coneRange: 210, coneAngleDeg: 72, pauseMs: 700, phase: 0.4,
+        seed: 23,
+        waypoints: [[26, 16], [23, 16], [23, 2], [26, 2]],
+        speed: 74, range: 210, halfAngle: 0.628, pause: 0.7, phase: 0.4,
       },
       {
         name: 'Sable',
-        waypoints: [{ x: 300, y: 300 }, { x: 660, y: 300 }, { x: 660, y: 120 }, { x: 300, y: 120 }],
-        speed: 84, coneRange: 220, coneAngleDeg: 76, pauseMs: 500, phase: 0.75,
+        seed: 37,
+        waypoints: [[13, 4], [13, 11], [16, 11], [16, 4]],
+        speed: 84, range: 220, halfAngle: 0.663, pause: 0.5, phase: 0.75,
       },
     ],
   },
 ];
 
 const STEP = 1 / 60; // fixed timestep, seconds
-const LEVEL_DATA = Array.isArray(LEVELS) && LEVELS.length > 0 ? LEVELS : FALLBACK_LEVELS;
+
+async function loadLevels() {
+  try {
+    const mod = await import('./levels.js');
+    if (mod && Array.isArray(mod.LEVELS) && mod.LEVELS.length > 0) {
+      return { levels: mod.LEVELS, fromFallback: false };
+    }
+  } catch (err) {
+    // levels.js not written yet — fall through to the built-in levels.
+  }
+  return { levels: FALLBACK_LEVELS, fromFallback: true };
+}
 const SCREENS = ['title', 'level-complete', 'win', 'caught', 'pause'];
 
 function el(id) {
@@ -162,7 +186,8 @@ function showScreen(name) {
   }
 }
 
-export function boot() {
+export async function boot() {
+  const { levels: LEVEL_DATA, fromFallback } = await loadLevels();
   const canvas = el('game');
   const ctx = canvas.getContext('2d');
   const input = createInput(canvas);
@@ -536,7 +561,7 @@ export function boot() {
       return LEVEL_DATA;
     },
     get levelsFromFallback() {
-      return LEVEL_DATA === FALLBACK_LEVELS;
+      return fromFallback;
     },
     get muted() {
       return isMuted();

@@ -22,25 +22,30 @@ export function clampAngle(a) {
 }
 
 export class Warden {
-  // def follows the level-data shape: waypoints are {x, y} pixel points
-  // (arrays [x, y] are also accepted), speed is px/s, coneRange is px,
-  // coneAngleDeg is the FULL cone angle in degrees, pauseMs is the wait
-  // at each waypoint, and phase (0..1) starts the guard part-way along
-  // its loop so guards on one level never march in lockstep.
+  // def follows the level-data shape: waypoints are [tx, ty] tile pairs
+  // (objects {x, y} are also accepted), speed is px/s, range is px,
+  // halfAngle is half the vision cone in radians, pause is the wait in
+  // seconds at each waypoint. `phase` is already encoded by the level
+  // author rotating the waypoint list, so the guard simply starts at
+  // waypoints[0] facing the next stop.
   constructor(def, tile) {
     this.tile = tile;
-    const raw = def.waypoints && def.waypoints.length ? def.waypoints : [{ x: 2, y: 2 }];
+    const raw = def.waypoints && def.waypoints.length ? def.waypoints : [[2, 2]];
     this.waypoints = raw.map((wp) => {
       if (Array.isArray(wp)) return { x: (wp[0] + 0.5) * tile, y: (wp[1] + 0.5) * tile };
-      return { x: wp.x, y: wp.y };
+      return { x: (wp.x + 0.5) * tile, y: (wp.y + 0.5) * tile };
     });
+    this.x = this.waypoints[0].x;
+    this.y = this.waypoints[0].y;
+    this.wpIndex = 1 % this.waypoints.length;
+    const next = this.waypoints[this.wpIndex];
+    this.dir = def.facing !== undefined ? def.facing : angleTo(this.x, this.y, next.x, next.y);
     this.speed = def.speed || 55; // px/s on patrol
     this.chaseSpeed = def.chaseSpeed || this.speed * 1.75;
     this.range = def.coneRange || def.range || 180; // vision range, px
-    const fullAngleDeg = def.coneAngleDeg !== undefined
-      ? def.coneAngleDeg
-      : (def.halfAngle !== undefined ? (def.halfAngle * 180) / Math.PI * 2 : 68);
-    this.halfAngle = ((fullAngleDeg / 2) * Math.PI) / 180;
+    this.halfAngle = def.halfAngle !== undefined
+      ? def.halfAngle
+      : (def.coneAngleDeg !== undefined ? ((def.coneAngleDeg / 2) * Math.PI) / 180 : 0.6);
     this.pauseTime = def.pauseMs !== undefined ? def.pauseMs / 1000 : (def.pause || 1.1);
     this.state = 'patrol';
     this.detection = 0; // 0..1, per-guard meter
@@ -48,50 +53,9 @@ export class Warden {
     this.loseTimer = 0; // seconds since the player was last visible (chase)
     this.lookTimer = 0; // seconds spent looking around while suspicious
     this.pauseTimer = 0;
-    this.scanPhase = (def.phase || 0) * 6;
+    this.scanPhase = def.seed ? def.seed * 0.7 : 0;
     this.stepPhase = 0; // walk-cycle phase, used by the renderer
     this.suspicionPoint = null;
-    // Start part-way along the patrol loop when a phase is given.
-    const phase = def.phase || 0;
-    if (phase > 0 && this.waypoints.length > 1) {
-      const loop = this.patrolLoopLength();
-      let remaining = phase * loop;
-      for (let i = 0; i < this.waypoints.length; i++) {
-        const a = this.waypoints[i];
-        const b = this.waypoints[(i + 1) % this.waypoints.length];
-        const seg = Math.hypot(b.x - a.x, b.y - a.y);
-        if (remaining <= seg) {
-          const t = seg === 0 ? 0 : remaining / seg;
-          this.x = a.x + (b.x - a.x) * t;
-          this.y = a.y + (b.y - a.y) * t;
-          this.wpIndex = (i + 1) % this.waypoints.length;
-          this.dir = angleTo(this.x, this.y, b.x, b.y);
-          break;
-        }
-        remaining -= seg;
-      }
-      if (this.x === undefined) {
-        this.x = this.waypoints[0].x;
-        this.y = this.waypoints[0].y;
-        this.wpIndex = 1 % this.waypoints.length;
-      }
-    } else {
-      this.x = this.waypoints[0].x;
-      this.y = this.waypoints[0].y;
-      this.wpIndex = 1 % this.waypoints.length;
-      const next = this.waypoints[this.wpIndex];
-      this.dir = def.facing !== undefined ? def.facing : angleTo(this.x, this.y, next.x, next.y);
-    }
-  }
-
-  patrolLoopLength() {
-    let total = 0;
-    for (let i = 0; i < this.waypoints.length; i++) {
-      const a = this.waypoints[i];
-      const b = this.waypoints[(i + 1) % this.waypoints.length];
-      total += Math.hypot(b.x - a.x, b.y - a.y);
-    }
-    return total;
   }
 
   get alertLevel() {
