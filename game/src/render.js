@@ -109,11 +109,26 @@ export function renderGame(ctx, game, screen) {
   // not transparent page background.
   ctx.fillStyle = '#20262f';
   ctx.fillRect(0, 0, game.w, game.h);
-  // drawLevelBase draws floor, shadows, bushes, intel, exit, crates and
-  // walls from the level data — but it would draw already-taken parcels,
-  // so pass it the level with only the parcels still on the floor.
+  // F1 fix: art.js draws in raw PIXEL units, but game.levelDef stores
+  // geometry in TILE units (30x19 tiles, TILE=32). Passing the raw
+  // levelDef made every wall/crate/shadow/bush/exit draw ~32x too
+  // small, clustered in the top-left corner — invisible in practice.
+  // The engine already converted the level to pixels when it built
+  // the game (game.walls, game.crates, game.bushes, game.shadows,
+  // game.exit, game.intel), so hand drawLevelBase that converted
+  // pixel geometry instead of the tile-format definition. Intel is
+  // still filtered to the parcels remaining on the floor.
   const remaining = game.intel.filter((item) => !item.taken);
-  drawLevelBase(ctx, { ...game.levelDef, intel: remaining }, time);
+  const pixelLevel = {
+    ...game.levelDef,
+    walls: game.walls,
+    crates: game.crates,
+    bushes: game.bushes,
+    shadows: game.shadows,
+    exit: game.exit,
+    intel: remaining,
+  };
+  drawLevelBase(ctx, pixelLevel, time);
 
   for (const guard of game.guards) {
     drawVisionCone(

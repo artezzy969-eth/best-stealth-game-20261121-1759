@@ -312,7 +312,16 @@ export async function boot() {
       const node = el(id);
       if (node) node.textContent = text;
     };
-    setText('level-complete-sub', `${game.levelName} cleared — unseen.`);
+    // F7 fix: "unseen" is only true when the run was never spotted.
+    // Word the sub-line from runSpotted so a spotted clear never
+    // claims to be unseen.
+    const spottedWord =
+      runSpotted === 0
+        ? `${game.levelName} cleared — unseen.`
+        : runSpotted === 1
+          ? `${game.levelName} cleared — spotted 1 time.`
+          : `${game.levelName} cleared — spotted ${runSpotted} times.`;
+    setText('level-complete-sub', spottedWord);
     setText('level-complete-time', formatTime(game.time));
     setText('level-complete-score', String(game.score));
     setText('level-complete-spotted', String(runSpotted));
@@ -336,7 +345,10 @@ export async function boot() {
     setText('caught-sub', game.statusReason || "A guard's lamp found you.");
     setText('caught-level', String(levelIndex + 1));
     setText('caught-score', String(game.score));
-    setText('caught-time', formatTime(totalTime + game.time));
+    // F5 fix: onCaught() already folded this level's time into
+    // totalTime before calling fillCaught(), so adding game.time
+    // again here doubled the displayed time (00:05 became 00:10).
+    setText('caught-time', formatTime(totalTime));
   }
 
   function onLevelComplete() {
@@ -498,9 +510,27 @@ export async function boot() {
       const guard = game.guards[0];
       const p = game.player;
       if (guard) {
-        const ahead = 90;
-        p.x = guard.x + Math.cos(guard.dir) * ahead;
-        p.y = guard.y + Math.sin(guard.dir) * ahead;
+        // F3 fix: the old shot put the player 90 px ahead of a chasing
+        // guard at detection 0.75, so the guard closed the gap and the
+        // run was already 'caught' <1 s later — no alert frame could
+        // ever be captured. Three changes make the shot stable:
+        //   1. the player stands ~150 px ahead, nudged sideways out of
+        //      the bush, so the guard's red cone still reaches them
+        //      but the gap is wider;
+        //   2. detection stays 0.75 in 'chase' so the HUD reads
+        //      Hunted / Exposed, exactly the alert moment;
+        //   3. game.shotHold freezes the simulation (the frame loop
+        //      skips updateGame while it is set) so the guard cannot
+        //      move, the meter cannot fill and the run cannot flip to
+        //      'caught' while the screenshot is taken. startLevel()
+        //      builds a fresh game object, so the hold never leaks
+        //      into normal play.
+        const ahead = 150;
+        const side = 80;
+        const px = guard.x + Math.cos(guard.dir) * ahead - Math.sin(guard.dir) * side;
+        const py = guard.y + Math.sin(guard.dir) * ahead + Math.cos(guard.dir) * side;
+        p.x = px;
+        p.y = py;
         p.crouched = false;
         crouchLatch = false;
         guard.state = 'chase';
@@ -508,6 +538,7 @@ export async function boot() {
         guard.lastSeen = { x: p.x, y: p.y };
         guard.loseTimer = 0;
         game.visibility = 0.75;
+        game.shotHold = true;
       }
       return 'alert';
     }
@@ -524,9 +555,34 @@ export async function boot() {
       return 'caught';
     }
     if (name === 'win') {
+      // F4 fix: the old helper only flipped the screen to 'win', so
+      // the overlay ("GHOST RUN COMPLETE / Nobody saw a thing") sat
+      // over a HUD that still read Hunted / Exposed with 0/2 parcels
+      // and a guard mid-chase behind it. Rebuild a clean ghost run
+      // from level 1 first, then stage it as a completed win: every
+      // parcel collected, every guard back on patrol with an empty
+      // detection meter, visibility 0, and runSpotted 0 so the win
+      // screen's "Times spotted 0" agrees with "Nobody saw a thing".
+      // The player stands at the exit they just slipped through.
+      startLevel(0);
+      for (const item of game.intel) item.taken = true;
+      game.intelCollected = game.intelTotal;
+      for (const guard of game.guards) {
+        guard.state = 'patrol';
+        guard.detection = 0;
+        guard.lastSeen = null;
+        guard.loseTimer = 0;
+        guard.lookTimer = 0;
+        guard.suspicionPoint = null;
+      }
+      game.visibility = 0;
+      game.flash = 0;
+      game.spotted = 0;
+      runSpotted = 0;
+      game.player.x = game.exit.x + game.exit.w / 2;
+      game.player.y = game.exit.y + game.exit.h / 2;
       totalScore = game.score + 1200;
       totalTime += game.time;
-      runSpotted += game.spotted;
       game.score = totalScore;
       game.status = 'level-complete';
       screen = 'win';
@@ -579,7 +635,10 @@ export async function boot() {
     const elapsed = Math.min(0.25, (now - last) / 1000);
     last = now;
     handleGlobalKeys();
-    if (screen === 'playing') {
+    // F3: a shot state may freeze the simulation (game.shotHold) so a
+    // staged alert frame stays put for the screenshot; rendering and
+    // the HUD still update every frame. Normal play never sets it.
+    if (screen === 'playing' && !game.shotHold) {
       // Stance: holding Shift sneaks, and C toggles a sneak latch.
       game.player.crouched = crouchLatch || input.sneakHeld();
       accumulator += elapsed;
