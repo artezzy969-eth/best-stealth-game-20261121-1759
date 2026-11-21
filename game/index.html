@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadow Courier — a top-down stealth game</title>
+<meta name="description" content="Shadow Courier: an original top-down stealth game. Slip past patrolling guards, hide in shadow and cover, grab the parcels and reach the exit unseen.">
+<link rel="stylesheet" href="./style.css">
+<!--
+  SHADOW COURIER — page shell (worker B1).
+  Game code lives in game/src/ and is filled in by the other workers:
+    game/src/main.js    (B2) — game loop, input, guard AI, detection, win/lose.
+    game/src/levels.js  (B3) — level maps: walls, cover, shadows, guards, exit.
+    game/src/audio.js   (B3) — WebAudio footsteps, alert stings and ambience.
+  main.js is loaded as a module below. It must import ./levels.js and
+  ./audio.js itself, so B2/B3 only fill those files — this file is not
+  rewritten. All art is drawn on the canvas by main.js; no images, no
+  fonts and no network requests anywhere on this page.
+-->
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <h1 id="game-title">SHADOW COURIER</h1>
+    <p id="tagline">Slip past the guards. Take the parcels. Reach the exit unseen.</p>
+  </header>
+
+  <!-- ============ HUD (always visible while playing) ============ -->
+  <div id="hud" aria-label="Game status">
+    <div class="hud-group" id="hud-level-group">
+      <span class="hud-label">LEVEL</span>
+      <span class="hud-value" id="hud-level">1 / 3</span>
+    </div>
+    <div class="hud-group" id="hud-timer-group">
+      <span class="hud-label">TIME</span>
+      <span class="hud-value" id="hud-timer">00:00</span>
+    </div>
+    <div class="hud-group" id="hud-score-group">
+      <span class="hud-label">SCORE</span>
+      <span class="hud-value" id="hud-score">0</span>
+    </div>
+    <div class="hud-group hud-meter-group" id="hud-visibility-group">
+      <span class="hud-label">VISIBILITY</span>
+      <div class="meter" id="hud-visibility" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Visibility">
+        <div class="meter-fill" id="hud-visibility-fill"></div>
+      </div>
+      <span class="hud-value meter-readout" id="hud-visibility-text">Hidden</span>
+    </div>
+    <div class="hud-group hud-meter-group" id="hud-noise-group">
+      <span class="hud-label">NOISE</span>
+      <div class="meter" id="hud-noise" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Noise">
+        <div class="meter-fill" id="hud-noise-fill"></div>
+      </div>
+      <span class="hud-value meter-readout" id="hud-noise-text">Silent</span>
+    </div>
+    <div class="hud-group" id="hud-crouch-group">
+      <span class="hud-label">STANCE</span>
+      <span class="hud-value" id="hud-crouch">Standing</span>
+    </div>
+    <div class="hud-group" id="hud-alert-group">
+      <span class="hud-label">ALERT</span>
+      <span class="hud-value" id="hud-alert">Unseen</span>
+    </div>
+    <div class="hud-group" id="hud-objective-group">
+      <span class="hud-label">OBJECTIVE</span>
+      <span class="hud-value" id="hud-objective">Parcels 0 / 3</span>
+    </div>
+  </div>
+
+  <!-- ============ Game stage ============ -->
+  <main id="stage">
+    <canvas id="game" width="960" height="600" aria-label="Shadow Courier game canvas"></canvas>
+    <noscript><p id="noscript">Shadow Courier needs JavaScript enabled to play.</p></noscript>
+
+    <!-- Title screen -->
+    <section id="screen-title" class="screen" aria-label="Title screen">
+      <h2>SHADOW COURIER</h2>
+      <p class="screen-sub">A top-down stealth game</p>
+      <p class="screen-text">Night shift at the old Meridian depot. You are the courier
+        nobody is supposed to see. Cross each floor, collect the parcels,
+        and slip out the green exit — while the guards sweep their lamps
+        across the floor. Crouch in the shadows, freeze behind the crates,
+        and never let a vision cone touch you.</p>
+      <ul class="controls-list">
+        <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> — move</li>
+        <li><kbd>Shift</kbd> (hold) — crouch: slower, quieter, harder to spot</li>
+        <li><kbd>P</kbd> or <kbd>Esc</kbd> — pause</li>
+        <li><kbd>M</kbd> — mute sound &nbsp;·&nbsp; <kbd>R</kbd> — restart level</li>
+        <li>Mouse — click the buttons on every screen</li>
+      </ul>
+      <div class="screen-buttons">
+        <button type="button" id="btn-start" class="btn btn-primary">Start the run</button>
+        <button type="button" id="btn-how" class="btn">How to play</button>
+      </div>
+      <p class="screen-hint" id="how-text" hidden>Guards patrol fixed routes and
+        watch a cone of light ahead of them. Inside a cone you are spotted
+        faster when you stand, run, or make noise; crouching in shadow or
+        behind crates keeps you hidden. A guard who grows suspicious walks
+        over to check — break line of sight and stay quiet until the alert
+        fades. Collect every parcel on the floor, then reach the green exit.
+        Being caught ends the run. Three floors, one quiet courier.</p>
+    </section>
+
+    <!-- Level complete screen -->
+    <section id="screen-level-complete" class="screen" hidden aria-label="Level complete">
+      <h2>LEVEL CLEAR</h2>
+      <p class="screen-sub" id="level-complete-sub">Floor 1 cleared — unseen.</p>
+      <p class="screen-text">Time <strong id="level-complete-time">00:00</strong> &nbsp;·&nbsp;
+        Score <strong id="level-complete-score">0</strong> &nbsp;·&nbsp;
+        Times spotted <strong id="level-complete-spotted">0</strong></p>
+      <p class="screen-text">The next floor has more guards, tighter patrols and
+        fewer shadows. Keep low.</p>
+      <div class="screen-buttons">
+        <button type="button" id="btn-next-level" class="btn btn-primary">Next floor</button>
+        <button type="button" id="btn-replay-level" class="btn">Replay this floor</button>
+      </div>
+    </section>
+
+    <!-- Win screen -->
+    <section id="screen-win" class="screen" hidden aria-label="You win">
+      <h2>GHOST RUN COMPLETE</h2>
+      <p class="screen-sub">All three floors cleared. Nobody saw a thing.</p>
+      <p class="screen-text">Final time <strong id="win-time">00:00</strong> &nbsp;·&nbsp;
+        Final score <strong id="win-score">0</strong> &nbsp;·&nbsp;
+        Times spotted <strong id="win-spotted">0</strong></p>
+      <p class="screen-text">The Meridian depot never knew you were there. That is
+        the whole job — and you did it quietly.</p>
+      <div class="screen-buttons">
+        <button type="button" id="btn-play-again" class="btn btn-primary">Play again</button>
+        <button type="button" id="btn-menu-win" class="btn">Back to title</button>
+      </div>
+    </section>
+
+    <!-- Caught / lose screen -->
+    <section id="screen-caught" class="screen" hidden aria-label="Caught">
+      <h2>CAUGHT</h2>
+      <p class="screen-sub" id="caught-sub">A guard's lamp found you.</p>
+      <p class="screen-text">The run ends here — but the depot is still there, and
+        the guards still walk the same routes. Learn the patrol, wait for
+        the cone to turn, and try again quieter.</p>
+      <p class="screen-text">Floor <strong id="caught-level">1</strong> &nbsp;·&nbsp;
+        Score <strong id="caught-score">0</strong> &nbsp;·&nbsp;
+        Time <strong id="caught-time">00:00</strong></p>
+      <div class="screen-buttons">
+        <button type="button" id="btn-retry" class="btn btn-primary">Try again</button>
+        <button type="button" id="btn-menu-caught" class="btn">Back to title</button>
+      </div>
+    </section>
+
+    <!-- Pause screen -->
+    <section id="screen-pause" class="screen" hidden aria-label="Paused">
+      <h2>PAUSED</h2>
+      <p class="screen-sub">The depot waits. The guards do not — they are frozen too.</p>
+      <div class="screen-buttons">
+        <button type="button" id="btn-resume" class="btn btn-primary">Resume</button>
+        <button type="button" id="btn-restart" class="btn">Restart level</button>
+        <button type="button" id="btn-quit" class="btn">Quit to title</button>
+      </div>
+    </section>
+
+    <p id="toast" role="status" aria-live="polite"></p>
+  </main>
+
+  <footer id="bottombar">
+    <p><strong>How to play:</strong> collect every parcel, then reach the green exit.
+      Stay out of the guards' vision cones — crouch (<kbd>Shift</kbd>) in shadows
+      and behind crates to stay hidden. Noise draws guards; silence keeps you alive.</p>
+    <p><button type="button" id="btn-mute" class="btn btn-small">Sound: on</button>
+      <span id="footer-status">Shadow Courier — original top-down stealth game. No network requests; all art and sound are generated in the browser.</span></p>
+  </footer>
+</div>
+
+<!--
+  HOOK CONTRACT for game/src/main.js (B2):
+  - Show exactly one screen at a time by toggling `hidden` on the
+    #screen-* sections; the canvas keeps rendering behind them.
+  - HUD ids to update every frame: #hud-timer (mm:ss), #hud-score,
+    #hud-level ("N / 3"), #hud-objective ("Parcels a / b"),
+    #hud-crouch ("Standing" / "Crouching"), #hud-alert
+    ("Unseen" / "Suspicious" / "Hunted"), #hud-visibility-fill width %
+    + #hud-visibility-text ("Hidden" / "Exposed" / "Spotted"),
+    #hud-noise-fill width % + #hud-noise-text
+    ("Silent" / "Heard" / "Loud"), and aria-valuenow on both meters.
+  - Buttons to wire: #btn-start, #btn-how (toggles #how-text),
+    #btn-next-level, #btn-replay-level, #btn-play-again, #btn-menu-win,
+    #btn-retry, #btn-menu-caught, #btn-resume, #btn-restart, #btn-quit,
+    #btn-mute (toggles its own label "Sound: on/off").
+  - Fill the result fields before showing a screen: #level-complete-sub,
+    #level-complete-time, #level-complete-score, #level-complete-spotted,
+    #win-time, #win-score, #win-spotted, #caught-sub, #caught-level,
+    #caught-score, #caught-time. Use #toast for short in-game messages
+    ("Parcel collected", "Guard suspicious…").
+  - Expose window.ShadowCourier = { start, pause, resume, restartLevel,
+    nextLevel, quitToTitle, getState } so play-testers and screenshots
+    can drive the game without clicking. getState returns
+    { screen, level, score, timeMs, parcelsCollected, parcelsTotal,
+    alert, crouching, muted } using the same words the HUD shows.
+    Keep keyboard controls exactly as listed on the title screen.
+  - Guard vision cones, lamp light, crates, shadows, parcels and the
+    exit are all drawn on the canvas by main.js (B2/B3) — this shell
+    ships no image, audio or font files at all.
+-->
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

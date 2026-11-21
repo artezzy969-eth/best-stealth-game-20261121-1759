@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Night Shift — screenshot staging (temporary)</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #14181f; overflow: hidden; }
+  #wrap { width: 1280px; height: 800px; position: relative; }
+  #hud {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 64px;
+    display: flex; align-items: center; gap: 28px; padding: 0 24px;
+    box-sizing: border-box; background: #10141b; color: #dfe6ee;
+    font: bold 20px sans-serif;
+  }
+  #hud .title { color: #37c8a3; font-size: 24px; letter-spacing: 2px; }
+  #hud .dim { color: #8fa0b3; font-weight: normal; font-size: 17px; }
+  #hud .right { margin-left: auto; color: #f2c94c; font-size: 18px; }
+  #hint {
+    position: absolute; left: 0; bottom: 0; width: 1280px; height: 40px;
+    display: flex; align-items: center; padding: 0 24px; box-sizing: border-box;
+    background: #10141b; color: #9fb0c3; font: 16px sans-serif;
+  }
+  canvas { position: absolute; left: 160px; top: 64px; }
+  #banner {
+    position: absolute; left: 50%; top: 300px; transform: translate(-50%, -50%);
+    background: rgba(10, 14, 18, 0.88); border: 3px solid #46d17c; border-radius: 12px;
+    padding: 26px 54px; text-align: center; color: #eafff7;
+    font: bold 34px sans-serif; display: none;
+  }
+  #banner small { display: block; font: 19px sans-serif; color: #9fd8bb; margin-top: 10px; }
+  #alertbar {
+    position: absolute; left: 50%; top: 84px; transform: translateX(-50%);
+    background: rgba(232, 74, 58, 0.92); color: #fff; border-radius: 8px;
+    padding: 10px 26px; font: bold 22px sans-serif; display: none;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <span class="title">NIGHT SHIFT</span>
+    <span id="levelName">Level 1 — The Vault</span>
+    <span class="dim" id="timer">TIME 00:42</span>
+    <span class="dim" id="intel">INTEL 1/2</span>
+    <span class="right" id="score">SCORE 1,250</span>
+  </div>
+  <div id="alertbar">! SPOTTED — RUN FOR COVER !</div>
+  <canvas id="game" width="960" height="600"></canvas>
+  <div id="banner">LEVEL COMPLETE<small>The Vault cleared unseen &nbsp;•&nbsp; Time 00:58 &nbsp;•&nbsp; Intel 2/2 &nbsp;•&nbsp; Score 2,400</small></div>
+  <div id="hint">WASD / Arrows move &nbsp;•&nbsp; Shift crouch &nbsp;•&nbsp; Space sprint &nbsp;•&nbsp; Hide in shadows, bushes and behind crates</div>
+</div>
+<script type="module">
+import { LEVELS } from './src/levels.js';
+import * as art from './src/art.js';
+
+const params = new URLSearchParams(location.search);
+const shot = params.get('shot') || '1';
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const level = LEVELS[0];
+const t = 4.2; // fixed time so every render is deterministic
+
+function guardAngle(from, to) {
+  return Math.atan2(to.y - from.y, to.x - from.x);
+}
+
+function drawScene(player, guards, detection, state) {
+  art.drawLevelBase(ctx, level, t);
+  for (const g of guards) {
+    art.drawVisionCone(ctx, g.x, g.y, g.angle, g.range, g.half, g.state);
+  }
+  for (const g of guards) {
+    art.drawGuard(ctx, g.x, g.y, g.angle, g.state, t);
+  }
+  art.drawPlayer(ctx, player.x, player.y, player.angle, player.opts);
+  if (player.noise) art.drawNoiseRing(ctx, player.x, player.y, 0.45);
+  // HUD detection meter, screen space over the canvas top-left.
+  ctx.save();
+  art.drawDetectionMeter(ctx, 24, 556, 260, detection, state);
+  ctx.restore();
+}
+
+const mara = level.guards[0];
+const ivo = level.guards[1];
+
+if (shot === '1') {
+  // Overview: both guards mid-patrol, calm cones, player at start.
+  drawScene(
+    { x: level.playerStart.x, y: level.playerStart.y, angle: -Math.PI / 2, opts: {} },
+    [
+      { x: 480, y: 220, angle: Math.PI / 2, range: mara.coneRange, half: mara.coneAngleDeg / 2, state: 'calm' },
+      { x: 820, y: 300, angle: Math.PI / 2, range: ivo.coneRange, half: ivo.coneAngleDeg / 2, state: 'calm' },
+    ],
+    0.08, 'calm'
+  );
+} else if (shot === '2') {
+  // Hidden: player crouched behind a crate as Mara walks past, cone away.
+  document.getElementById('intel').textContent = 'INTEL 1/2';
+  document.getElementById('timer').textContent = 'TIME 01:05';
+  drawScene(
+    { x: 248, y: 252, angle: Math.PI, opts: { crouching: true, hidden: true } },
+    [
+      { x: 200, y: 320, angle: Math.PI / 2, range: mara.coneRange, half: mara.coneAngleDeg / 2, state: 'calm' },
+      { x: 700, y: 480, angle: 0, range: ivo.coneRange, half: ivo.coneAngleDeg / 2, state: 'calm' },
+    ],
+    0.12, 'calm'
+  );
+} else if (shot === '3') {
+  // Alert: Mara turned, cone on the player, meter nearly full, "!" overhead.
+  document.getElementById('alertbar').style.display = 'block';
+  document.getElementById('timer').textContent = 'TIME 01:31';
+  drawScene(
+    { x: 480, y: 300, angle: -Math.PI / 2, opts: {}, noise: true },
+    [
+      { x: 480, y: 170, angle: Math.PI / 2, range: mara.coneRange, half: mara.coneAngleDeg / 2, state: 'chase' },
+      { x: 820, y: 420, angle: Math.PI, range: ivo.coneRange, half: ivo.coneAngleDeg / 2, state: 'suspicious' },
+    ],
+    0.92, 'chase'
+  );
+} else {
+  // Win: player on the exit, completion banner up.
+  document.getElementById('banner').style.display = 'block';
+  document.getElementById('timer').textContent = 'TIME 00:58';
+  document.getElementById('intel').textContent = 'INTEL 2/2';
+  document.getElementById('score').textContent = 'SCORE 2,400';
+  drawScene(
+    { x: 906, y: 62, angle: -Math.PI / 2, opts: {} },
+    [
+      { x: 480, y: 420, angle: -Math.PI / 2, range: mara.coneRange, half: mara.coneAngleDeg / 2, state: 'calm' },
+      { x: 700, y: 480, angle: Math.PI, range: ivo.coneRange, half: ivo.coneAngleDeg / 2, state: 'calm' },
+    ],
+    0.0, 'calm'
+  );
+}
+document.title = 'shot-' + shot;
+</script>
+</body>
+</html>
