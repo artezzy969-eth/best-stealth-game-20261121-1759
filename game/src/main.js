@@ -1,251 +1,449 @@
 // main.js — entry module for Shadow Courier.
 // Canvas setup, fixed-timestep game loop, state machine
 // (title / playing / paused / level-complete / caught / win), keyboard and
-// mouse input, HUD updates, timer + score, and the window.__game hook the
-// play-tester drives for screenshots.
-// Levels come from ./levels.js (written by the level author); until that
-// file exists, three small built-in fallback levels keep the game playable.
+// mouse input, DOM HUD + screen wiring exactly as index.html's hook
+// contract specifies, timer + score, WebAudio hooks, and the two
+// play-test APIs: window.ShadowCourier (B1's contract) and window.__game
+// (screenshot shot states). Levels come from ./levels.js (static import,
+// as agreed with the level author); three small built-in fallback levels
+// in the same pixel format are used only if LEVELS arrives empty.
 // This file never writes levels.js itself.
 
-import { createGame, updateGame, TILE } from './engine.js';
+import { LEVELS } from './levels.js';
+import { createGame, updateGame } from './engine.js';
 import { createInput } from './input.js';
 import { makeRng } from './random.js';
 import { renderGame, formatTime } from './render.js';
+import {
+  initAudio,
+  setMuted,
+  isMuted,
+  playSound,
+  startAmbient,
+} from './audio.js';
 
-// --- Fallback levels (used only when ./levels.js is absent) -------------
-// Tile coords. Border walls ring every level; crates block sight and
-// movement, bushes and shadows conceal the courier.
+// --- Fallback levels (same pixel format as levels.js) --------------------
+// Used only when ./levels.js exports an empty LEVELS array.
 const FALLBACK_LEVELS = [
   {
     name: 'Vault',
     seed: 101,
-    cols: 30,
-    rows: 19,
-    playerStart: { x: 2, y: 16 },
-    exit: { x: 27, y: 1, w: 2, h: 2 },
+    brief: 'Opening night. Two wardens walk the floor.',
+    hint: 'Crouch in shadow. Crates block sight.',
+    parTime: 90,
+    playerStart: { x: 60, y: 520 },
+    exit: { x: 884, y: 40, w: 44, h: 44 },
     walls: [
-      { x: 0, y: 0, w: 30, h: 1 }, { x: 0, y: 18, w: 30, h: 1 },
-      { x: 0, y: 0, w: 1, h: 19 }, { x: 29, y: 0, w: 1, h: 19 },
-      { x: 8, y: 4, w: 1, h: 7 }, { x: 18, y: 8, w: 1, h: 7 },
-      { x: 12, y: 12, w: 6, h: 1 },
+      { x: 0, y: 0, w: 960, h: 16 }, { x: 0, y: 584, w: 960, h: 16 },
+      { x: 0, y: 0, w: 16, h: 600 }, { x: 944, y: 0, w: 16, h: 600 },
+      { x: 430, y: 120, w: 100, h: 24 }, { x: 430, y: 456, w: 100, h: 24 },
     ],
     crates: [
-      { x: 5, y: 6, w: 2, h: 2 }, { x: 14, y: 4, w: 2, h: 2 },
-      { x: 22, y: 12, w: 2, h: 2 }, { x: 10, y: 15, w: 2, h: 1 },
+      { x: 220, y: 180, w: 56, h: 56 }, { x: 560, y: 300, w: 56, h: 56 },
+      { x: 260, y: 470, w: 56, h: 56 },
     ],
-    bushes: [{ x: 4, y: 12, w: 3, h: 2 }, { x: 20, y: 5, w: 3, h: 2 }],
-    shadows: [{ x: 15, y: 14, w: 5, h: 2 }, { x: 24, y: 8, w: 3, h: 3 }],
-    intel: [{ x: 6, y: 3 }, { x: 16, y: 10 }, { x: 25, y: 15 }],
+    bushes: [{ x: 400, y: 250, w: 90, h: 70 }],
+    shadows: [{ x: 120, y: 90, w: 130, h: 90 }, { x: 620, y: 430, w: 150, h: 90 }],
+    intel: [
+      { x: 500, y: 300, label: 'Floor plan' },
+      { x: 880, y: 520, label: 'Key code' },
+    ],
     guards: [
-      { waypoints: [[6, 8], [14, 8], [14, 14], [6, 14]], speed: 55, range: 180 },
-      { waypoints: [[22, 3], [22, 10], [26, 10], [26, 3]], speed: 62, range: 185 },
+      {
+        name: 'Mara',
+        waypoints: [{ x: 480, y: 100 }, { x: 480, y: 500 }, { x: 200, y: 500 }, { x: 200, y: 100 }],
+        speed: 62, coneRange: 190, coneAngleDeg: 68, pauseMs: 900, phase: 0,
+      },
+      {
+        name: 'Ivo',
+        waypoints: [{ x: 820, y: 120 }, { x: 820, y: 480 }, { x: 600, y: 480 }, { x: 600, y: 120 }],
+        speed: 55, coneRange: 175, coneAngleDeg: 64, pauseMs: 1200, phase: 0.5,
+      },
     ],
-    par: 90,
   },
   {
     name: 'Archive',
     seed: 202,
-    cols: 30,
-    rows: 19,
-    playerStart: { x: 2, y: 2 },
-    exit: { x: 27, y: 16, w: 2, h: 2 },
+    brief: 'Three wardens, tighter shelves.',
+    hint: 'Bushes hide you completely while crouched.',
+    parTime: 105,
+    playerStart: { x: 60, y: 60 },
+    exit: { x: 884, y: 516, w: 44, h: 44 },
     walls: [
-      { x: 0, y: 0, w: 30, h: 1 }, { x: 0, y: 18, w: 30, h: 1 },
-      { x: 0, y: 0, w: 1, h: 19 }, { x: 29, y: 0, w: 1, h: 19 },
-      { x: 10, y: 3, w: 1, h: 8 }, { x: 19, y: 8, w: 1, h: 8 },
-      { x: 6, y: 14, w: 8, h: 1 },
+      { x: 0, y: 0, w: 960, h: 16 }, { x: 0, y: 584, w: 960, h: 16 },
+      { x: 0, y: 0, w: 16, h: 600 }, { x: 944, y: 0, w: 16, h: 600 },
+      { x: 200, y: 150, w: 220, h: 22 }, { x: 540, y: 430, w: 220, h: 22 },
     ],
     crates: [
-      { x: 5, y: 8, w: 2, h: 2 }, { x: 15, y: 5, w: 2, h: 2 },
-      { x: 23, y: 13, w: 2, h: 2 }, { x: 13, y: 16, w: 2, h: 1 },
+      { x: 90, y: 220, w: 52, h: 52 }, { x: 820, y: 250, w: 52, h: 52 },
+      { x: 120, y: 480, w: 52, h: 52 },
     ],
-    bushes: [{ x: 3, y: 13, w: 3, h: 2 }, { x: 21, y: 3, w: 3, h: 2 }],
-    shadows: [{ x: 12, y: 2, w: 5, h: 2 }, { x: 24, y: 10, w: 3, h: 3 }],
-    intel: [{ x: 8, y: 16 }, { x: 15, y: 9 }, { x: 25, y: 4 }],
+    bushes: [{ x: 430, y: 180, w: 100, h: 70 }],
+    shadows: [{ x: 330, y: 60, w: 140, h: 70 }, { x: 60, y: 330, w: 110, h: 100 }],
+    intel: [
+      { x: 480, y: 230, label: 'Catalogue' },
+      { x: 320, y: 520, label: 'Ledger' },
+      { x: 880, y: 90, label: 'Cipher' },
+    ],
     guards: [
-      { waypoints: [[4, 6], [12, 6], [12, 12], [4, 12]], speed: 60, range: 185 },
-      { waypoints: [[20, 5], [20, 12], [26, 12], [26, 5]], speed: 66, range: 190 },
-      { waypoints: [[14, 2], [14, 16]], speed: 50, range: 170 },
+      {
+        name: 'Mara',
+        waypoints: [{ x: 320, y: 90 }, { x: 320, y: 540 }, { x: 90, y: 540 }, { x: 90, y: 90 }],
+        speed: 66, coneRange: 195, coneAngleDeg: 70, pauseMs: 800, phase: 0,
+      },
+      {
+        name: 'Ivo',
+        waypoints: [{ x: 640, y: 90 }, { x: 640, y: 540 }, { x: 480, y: 540 }, { x: 480, y: 90 }],
+        speed: 60, coneRange: 185, coneAngleDeg: 66, pauseMs: 1000, phase: 0.33,
+      },
+      {
+        name: 'Sable',
+        waypoints: [{ x: 880, y: 200 }, { x: 880, y: 420 }, { x: 760, y: 420 }, { x: 760, y: 200 }],
+        speed: 72, coneRange: 200, coneAngleDeg: 72, pauseMs: 700, phase: 0.66,
+      },
     ],
-    par: 100,
   },
   {
     name: 'Rooftops',
     seed: 303,
-    cols: 30,
-    rows: 19,
-    playerStart: { x: 2, y: 16 },
-    exit: { x: 27, y: 2, w: 2, h: 2 },
+    brief: 'Fast wardens, long sightlines, thin cover.',
+    hint: 'Shadows are your only real cover up here.',
+    parTime: 120,
+    playerStart: { x: 60, y: 520 },
+    exit: { x: 884, y: 40, w: 44, h: 44 },
     walls: [
-      { x: 0, y: 0, w: 30, h: 1 }, { x: 0, y: 18, w: 30, h: 1 },
-      { x: 0, y: 0, w: 1, h: 19 }, { x: 29, y: 0, w: 1, h: 19 },
-      { x: 9, y: 5, w: 1, h: 7 }, { x: 15, y: 7, w: 1, h: 7 },
-      { x: 21, y: 4, w: 1, h: 8 },
+      { x: 0, y: 0, w: 960, h: 16 }, { x: 0, y: 584, w: 960, h: 16 },
+      { x: 0, y: 0, w: 16, h: 600 }, { x: 944, y: 0, w: 16, h: 600 },
+      { x: 240, y: 180, w: 180, h: 24 }, { x: 540, y: 396, w: 180, h: 24 },
     ],
     crates: [
-      { x: 5, y: 5, w: 2, h: 2 }, { x: 12, y: 13, w: 2, h: 2 },
-      { x: 18, y: 3, w: 2, h: 2 }, { x: 24, y: 12, w: 2, h: 2 },
+      { x: 150, y: 120, w: 52, h: 52 }, { x: 770, y: 430, w: 52, h: 52 },
     ],
-    bushes: [{ x: 4, y: 11, w: 3, h: 2 }, { x: 22, y: 8, w: 3, h: 2 }],
-    shadows: [{ x: 14, y: 15, w: 5, h: 2 }, { x: 25, y: 5, w: 3, h: 3 }],
-    intel: [{ x: 7, y: 2 }, { x: 17, y: 11 }, { x: 25, y: 16 }],
+    bushes: [{ x: 300, y: 300, w: 90, h: 60 }],
+    shadows: [{ x: 90, y: 240, w: 110, h: 120 }, { x: 400, y: 470, w: 160, h: 70 }],
+    intel: [
+      { x: 480, y: 300, label: 'Roof key' },
+      { x: 90, y: 90, label: 'Blueprint' },
+      { x: 880, y: 520, label: 'Manifest' },
+    ],
     guards: [
-      { waypoints: [[6, 4], [13, 4], [13, 11], [6, 11]], speed: 66, range: 190 },
-      { waypoints: [[19, 6], [25, 6], [25, 13], [19, 13]], speed: 70, range: 195 },
-      { waypoints: [[3, 9], [27, 9]], speed: 58, range: 180 },
+      {
+        name: 'Mara',
+        waypoints: [{ x: 480, y: 80 }, { x: 480, y: 520 }, { x: 120, y: 520 }, { x: 120, y: 80 }],
+        speed: 78, coneRange: 215, coneAngleDeg: 74, pauseMs: 600, phase: 0,
+      },
+      {
+        name: 'Ivo',
+        waypoints: [{ x: 840, y: 80 }, { x: 840, y: 520 }, { x: 620, y: 520 }, { x: 620, y: 80 }],
+        speed: 74, coneRange: 210, coneAngleDeg: 72, pauseMs: 700, phase: 0.4,
+      },
+      {
+        name: 'Sable',
+        waypoints: [{ x: 300, y: 300 }, { x: 660, y: 300 }, { x: 660, y: 120 }, { x: 300, y: 120 }],
+        speed: 84, coneRange: 220, coneAngleDeg: 76, pauseMs: 500, phase: 0.75,
+      },
     ],
-    par: 110,
   },
 ];
 
 const STEP = 1 / 60; // fixed timestep, seconds
+const LEVEL_DATA = Array.isArray(LEVELS) && LEVELS.length > 0 ? LEVELS : FALLBACK_LEVELS;
+const SCREENS = ['title', 'level-complete', 'win', 'caught', 'pause'];
 
-async function loadLevels() {
-  try {
-    const mod = await import('./levels.js');
-    if (mod && Array.isArray(mod.LEVELS) && mod.LEVELS.length > 0) {
-      return { levels: mod.LEVELS, fromFallback: false };
-    }
-  } catch (err) {
-    // levels.js not written yet — fall through to the built-in levels.
-  }
-  return { levels: FALLBACK_LEVELS, fromFallback: true };
-}
-
-function findCanvas() {
-  return (
-    document.getElementById('game-canvas') ||
-    document.querySelector('canvas') ||
-    (() => {
-      const canvas = document.createElement('canvas');
-      canvas.id = 'game-canvas';
-      document.body.appendChild(canvas);
-      return canvas;
-    })()
-  );
-}
-
-function hudElement(id) {
+function el(id) {
   return document.getElementById(id);
 }
 
-export async function boot() {
-  const { levels: LEVELS, fromFallback } = await loadLevels();
-  const canvas = findCanvas();
+function showScreen(name) {
+  // Exactly one DOM screen visible at a time; null hides them all.
+  for (const key of SCREENS) {
+    const section = el(`screen-${key}`);
+    if (section) section.hidden = key !== name;
+  }
+}
+
+export function boot() {
+  const canvas = el('game');
   const ctx = canvas.getContext('2d');
   const input = createInput(canvas);
 
   let levelIndex = 0;
   let totalScore = 0;
   let totalTime = 0;
+  let runSpotted = 0;
   let screen = 'title'; // title | playing | paused | level-complete | caught | win
-  let muted = false;
-  let game = createGame(LEVELS[0], 0, makeRng(LEVELS[0].seed || 1));
+  let crouchLatch = false; // C toggles sneaking; holding Shift sneaks too
+  let footstepTimer = 0;
+  let toastTimer = 0;
+  let audioStarted = false;
+  let game = createGame(LEVEL_DATA[0], 0, makeRng(LEVEL_DATA[0].seed || 1));
   canvas.width = game.w;
   canvas.height = game.h;
 
   function startLevel(index) {
     levelIndex = index;
-    const def = LEVELS[levelIndex];
+    const def = LEVEL_DATA[levelIndex];
     game = createGame(def, levelIndex, makeRng(def.seed || 1));
     game.score = totalScore;
     canvas.width = game.w;
     canvas.height = game.h;
     screen = 'playing';
+    showScreen(null);
   }
 
   function startGame() {
     totalScore = 0;
     totalTime = 0;
+    runSpotted = 0;
     startLevel(0);
   }
 
-  function updateHud() {
-    const setText = (id, text) => {
-      const el = hudElement(id);
-      if (el) el.textContent = text;
-    };
-    setText('hud-time', formatTime(game.time + totalTime));
-    setText('hud-score', String(game.score));
-    setText('hud-level', `${game.levelName} (${levelIndex + 1}/${LEVELS.length})`);
-    setText('hud-intel', `${game.intelCollected}/${game.intelTotal}`);
-    setText('hud-state', screen);
-    const detect = hudElement('hud-detect');
-    if (detect) detect.style.width = `${Math.round(game.visibility * 100)}%`;
-    const noise = hudElement('hud-noise');
-    if (noise) noise.style.width = `${Math.round(Math.min(1, game.noise / 150) * 100)}%`;
-    const message = hudElement('hud-message');
-    if (message) {
-      message.textContent =
-        screen === 'caught'
-          ? game.statusReason
-          : screen === 'level-complete'
-            ? game.statusReason
-            : screen === 'title' && fromFallback
-              ? 'Shadow Courier — playing fallback levels (levels.js not found yet)'
-              : screen === 'title'
-                ? 'Shadow Courier — press Enter to begin'
-                : '';
+  function quitToTitle() {
+    totalScore = 0;
+    totalTime = 0;
+    runSpotted = 0;
+    levelIndex = 0;
+    game = createGame(LEVEL_DATA[0], 0, makeRng(LEVEL_DATA[0].seed || 1));
+    canvas.width = game.w;
+    canvas.height = game.h;
+    screen = 'title';
+    showScreen('title');
+  }
+
+  function alertWord() {
+    if (game.guards.some((g) => g.state === 'chase')) return 'Hunted';
+    if (game.guards.some((g) => g.state === 'suspicious')) return 'Suspicious';
+    return 'Unseen';
+  }
+
+  function toast(message) {
+    const node = el('toast');
+    if (!node) return;
+    node.textContent = message;
+    toastTimer = 2.4;
+  }
+
+  function ensureAudio() {
+    if (audioStarted) return;
+    if (initAudio()) {
+      audioStarted = true;
+      startAmbient();
     }
+  }
+
+  function updateMuteButton() {
+    const btn = el('btn-mute');
+    if (btn) btn.textContent = isMuted() ? 'Sound: off' : 'Sound: on';
+  }
+
+  function toggleMute() {
+    ensureAudio();
+    setMuted(!isMuted());
+    updateMuteButton();
+    return isMuted();
+  }
+
+  function updateHud() {
+    const totalSeconds = totalTime + (screen === 'playing' ? game.time : 0);
+    const setText = (id, text) => {
+      const node = el(id);
+      if (node) node.textContent = text;
+    };
+    setText('hud-timer', formatTime(totalSeconds));
+    setText('hud-score', String(game.score));
+    setText('hud-level', `${levelIndex + 1} / ${LEVEL_DATA.length}`);
+    setText('hud-objective', `Parcels ${game.intelCollected} / ${game.intelTotal}`);
+    setText('hud-crouch', game.player.crouched ? 'Crouching' : 'Standing');
+    setText('hud-alert', alertWord());
+    const visibility = Math.round(game.visibility * 100);
+    const visFill = el('hud-visibility-fill');
+    if (visFill) visFill.style.width = `${visibility}%`;
+    const visMeter = el('hud-visibility');
+    if (visMeter) visMeter.setAttribute('aria-valuenow', String(visibility));
+    setText(
+      'hud-visibility-text',
+      game.visibility >= 1 ? 'Spotted' : game.visibility > 0.45 ? 'Exposed' : 'Hidden',
+    );
+    const noisePct = Math.round(Math.min(1, game.noise / 150) * 100);
+    const noiseFill = el('hud-noise-fill');
+    if (noiseFill) noiseFill.style.width = `${noisePct}%`;
+    const noiseMeter = el('hud-noise');
+    if (noiseMeter) noiseMeter.setAttribute('aria-valuenow', String(noisePct));
+    setText(
+      'hud-noise-text',
+      game.noise <= 0 ? 'Silent' : game.player.crouched ? 'Heard' : 'Loud',
+    );
+    if (toastTimer > 0) {
+      toastTimer -= STEP;
+      if (toastTimer <= 0) {
+        const node = el('toast');
+        if (node) node.textContent = '';
+      }
+    }
+  }
+
+  function fillLevelComplete() {
+    const setText = (id, text) => {
+      const node = el(id);
+      if (node) node.textContent = text;
+    };
+    setText('level-complete-sub', `${game.levelName} cleared — unseen.`);
+    setText('level-complete-time', formatTime(game.time));
+    setText('level-complete-score', String(game.score));
+    setText('level-complete-spotted', String(runSpotted));
+  }
+
+  function fillWin() {
+    const setText = (id, text) => {
+      const node = el(id);
+      if (node) node.textContent = text;
+    };
+    setText('win-time', formatTime(totalTime));
+    setText('win-score', String(totalScore));
+    setText('win-spotted', String(runSpotted));
+  }
+
+  function fillCaught() {
+    const setText = (id, text) => {
+      const node = el(id);
+      if (node) node.textContent = text;
+    };
+    setText('caught-sub', game.statusReason || "A guard's lamp found you.");
+    setText('caught-level', String(levelIndex + 1));
+    setText('caught-score', String(game.score));
+    setText('caught-time', formatTime(totalTime + game.time));
+  }
+
+  function onLevelComplete() {
+    totalScore = game.score;
+    totalTime += game.time;
+    runSpotted += game.spotted;
+    screen = 'level-complete';
+    fillLevelComplete();
+    showScreen('level-complete');
+    playSound('win');
+  }
+
+  function onCaught() {
+    totalTime += game.time;
+    runSpotted += game.spotted;
+    screen = 'caught';
+    fillCaught();
+    showScreen('caught');
+    playSound('caught');
+  }
+
+  function nextLevel() {
+    if (screen !== 'level-complete') return;
+    if (levelIndex + 1 < LEVEL_DATA.length) {
+      startLevel(levelIndex + 1);
+    } else {
+      screen = 'win';
+      fillWin();
+      showScreen('win');
+      playSound('win');
+    }
+  }
+
+  function pauseGame() {
+    if (screen !== 'playing') return;
+    screen = 'paused';
+    showScreen('pause');
+  }
+
+  function resumeGame() {
+    if (screen !== 'paused') return;
+    screen = 'playing';
+    showScreen(null);
+  }
+
+  function drainEvents() {
+    for (const event of game.events) {
+      if (event === 'pickup') {
+        playSound('pickup');
+        toast('Parcel collected');
+      } else if (event === 'suspicious') {
+        playSound('suspicious');
+        toast('Guard suspicious…');
+      } else if (event === 'alert') {
+        playSound('alert');
+        toast('Spotted — run!');
+      }
+    }
+    game.events.length = 0;
   }
 
   function handleGlobalKeys() {
-    if (input.wasPressed('KeyP') && (screen === 'playing' || screen === 'paused')) {
-      screen = screen === 'playing' ? 'paused' : 'playing';
+    if (input.wasPressed('KeyM')) toggleMute();
+    if (input.wasPressed('KeyC')) crouchLatch = !crouchLatch;
+    if (input.wasPressed('KeyP') || input.wasPressed('Escape')) {
+      if (screen === 'playing') pauseGame();
+      else if (screen === 'paused') resumeGame();
     }
-    if (input.wasPressed('KeyM')) {
-      muted = !muted;
-    }
-    if (input.wasPressed('KeyR')) {
-      if (screen !== 'title') startLevel(levelIndex);
+    if (input.wasPressed('KeyR') && screen !== 'title') {
+      startLevel(levelIndex);
+      toast('Level restarted');
     }
     if (input.wasPressed('Enter') || input.wasPressed('Space')) {
+      ensureAudio();
       if (screen === 'title') startGame();
-      else if (screen === 'level-complete') {
-        totalScore = game.score;
-        totalTime += game.time;
-        if (levelIndex + 1 < LEVELS.length) startLevel(levelIndex + 1);
-        else screen = 'win';
-      } else if (screen === 'caught' || screen === 'win') {
-        startGame();
-      }
+      else if (screen === 'level-complete') nextLevel();
+      else if (screen === 'caught' || screen === 'win') startGame();
     }
-    // Mouse click on the title screen starts the game; in play it pings.
-    if (input.takeClick() && screen === 'title') startGame();
+    // Any key or click is a user gesture: unlock audio once.
+    if (input.takeClick()) ensureAudio();
   }
 
   function syncScreenFromGame() {
-    if (game.status === 'level-complete' && screen === 'playing') {
-      screen = 'level-complete';
-    } else if (game.status === 'caught' && screen === 'playing') {
-      screen = 'caught';
-    }
+    if (game.status === 'level-complete' && screen === 'playing') onLevelComplete();
+    else if (game.status === 'caught' && screen === 'playing') onCaught();
   }
 
-  let last = performance.now();
-  let accumulator = 0;
-
-  function frame(now) {
-    const elapsed = Math.min(0.25, (now - last) / 1000);
-    last = now;
-    handleGlobalKeys();
-    if (screen === 'playing') {
-      accumulator += elapsed;
-      while (accumulator >= STEP) {
-        updateGame(game, input, STEP);
-        accumulator -= STEP;
-        if (game.status !== 'playing') break;
-      }
-      syncScreenFromGame();
-    }
-    renderGame(ctx, game, screen);
-    updateHud();
-    input.endFrame();
-    requestAnimationFrame(frame);
+  function getState() {
+    return {
+      screen,
+      level: levelIndex + 1,
+      score: game.score,
+      timeMs: Math.round((totalTime + game.time) * 1000),
+      parcelsCollected: game.intelCollected,
+      parcelsTotal: game.intelTotal,
+      alert: alertWord(),
+      crouching: game.player.crouched,
+      muted: isMuted(),
+    };
   }
 
-  // --- Screenshot / play-test hook --------------------------------------
-  // Only positions entities and sets state; it never fakes a render.
+  // --- Buttons (B1 hook contract) ----------------------------------------
+  function wireButton(id, fn) {
+    const btn = el(id);
+    if (btn) {
+      btn.addEventListener('click', () => {
+        ensureAudio();
+        playSound('click');
+        fn();
+      });
+    }
+  }
+  wireButton('btn-start', startGame);
+  wireButton('btn-how', () => {
+    const how = el('how-text');
+    if (how) how.hidden = !how.hidden;
+  });
+  wireButton('btn-next-level', nextLevel);
+  wireButton('btn-replay-level', () => startLevel(levelIndex));
+  wireButton('btn-play-again', startGame);
+  wireButton('btn-menu-win', quitToTitle);
+  wireButton('btn-retry', () => startLevel(levelIndex));
+  wireButton('btn-menu-caught', quitToTitle);
+  wireButton('btn-resume', resumeGame);
+  wireButton('btn-restart', () => startLevel(levelIndex));
+  wireButton('btn-quit', quitToTitle);
+  wireButton('btn-mute', toggleMute);
+  updateMuteButton();
+
+  // --- Screenshot / play-test hooks ---------------------------------------
+  // setStateForShot only positions entities and sets state; it never
+  // fakes a render.
   function setStateForShot(name) {
     if (name === 'overview') {
       startLevel(0);
@@ -254,12 +452,13 @@ export async function boot() {
     if (name === 'hidden') {
       startLevel(0);
       const p = game.player;
-      // Crouch behind the first crate while the nearest guard patrols past.
       const crate = game.crates[0];
       if (crate) {
+        // Crouch in the crate's shadow, on the side the patrol passes.
         p.x = crate.x + crate.w / 2;
         p.y = crate.y + crate.h + p.r + 2;
         p.crouched = true;
+        crouchLatch = true;
       }
       const guard = game.guards[0];
       if (guard) {
@@ -274,11 +473,11 @@ export async function boot() {
       const guard = game.guards[0];
       const p = game.player;
       if (guard) {
-        // Put the courier inside the warden's cone, close and standing.
         const ahead = 90;
         p.x = guard.x + Math.cos(guard.dir) * ahead;
         p.y = guard.y + Math.sin(guard.dir) * ahead;
         p.crouched = false;
+        crouchLatch = false;
         guard.state = 'chase';
         guard.detection = 0.75;
         guard.lastSeen = { x: p.x, y: p.y };
@@ -296,19 +495,32 @@ export async function boot() {
       }
       game.status = 'caught';
       game.statusReason = 'A warden caught you in the open.';
-      screen = 'caught';
+      onCaught();
       return 'caught';
     }
     if (name === 'win') {
       totalScore = game.score + 1200;
       totalTime += game.time;
+      runSpotted += game.spotted;
       game.score = totalScore;
       game.status = 'level-complete';
       screen = 'win';
+      fillWin();
+      showScreen('win');
       return 'win';
     }
     return null;
   }
+
+  window.ShadowCourier = {
+    start: startGame,
+    pause: pauseGame,
+    resume: resumeGame,
+    restartLevel: () => startLevel(levelIndex),
+    nextLevel,
+    quitToTitle,
+    getState,
+  };
 
   window.__game = {
     get state() {
@@ -321,23 +533,60 @@ export async function boot() {
       return game;
     },
     get levels() {
-      return LEVELS;
+      return LEVEL_DATA;
     },
     get levelsFromFallback() {
-      return fromFallback;
+      return LEVEL_DATA === FALLBACK_LEVELS;
     },
     get muted() {
-      return muted;
+      return isMuted();
     },
     setStateForShot,
     startLevel,
     startGame,
-    toggleMute() {
-      muted = !muted;
-      return muted;
-    },
+    toggleMute,
   };
 
+  let last = performance.now();
+  let accumulator = 0;
+
+  function frame(now) {
+    const elapsed = Math.min(0.25, (now - last) / 1000);
+    last = now;
+    handleGlobalKeys();
+    if (screen === 'playing') {
+      // Stance: holding Shift sneaks, and C toggles a sneak latch.
+      game.player.crouched = crouchLatch || input.sneakHeld();
+      accumulator += elapsed;
+      while (accumulator >= STEP) {
+        updateGame(game, input, STEP);
+        accumulator -= STEP;
+        if (game.status !== 'playing') break;
+      }
+      // Footsteps: one soft step per stride while moving, never crouched.
+      if (game.player.moving && !game.player.crouched) {
+        footstepTimer -= elapsed;
+        if (footstepTimer <= 0) {
+          playSound('runstep');
+          footstepTimer = 0.38;
+        }
+      } else if (game.player.moving) {
+        footstepTimer -= elapsed;
+        if (footstepTimer <= 0) {
+          playSound('footstep');
+          footstepTimer = 0.55;
+        }
+      }
+      drainEvents();
+      syncScreenFromGame();
+    }
+    renderGame(ctx, game, screen);
+    updateHud();
+    input.endFrame();
+    requestAnimationFrame(frame);
+  }
+
+  showScreen('title');
   requestAnimationFrame(frame);
   return window.__game;
 }

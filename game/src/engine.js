@@ -266,6 +266,7 @@ function checkEndConditions(game) {
     if (guard.state === 'chase' && dist < CATCH_DIST) {
       game.status = 'caught';
       game.statusReason = 'A warden caught you in the open.';
+      game.events.push('caught');
       return;
     }
   }
@@ -276,6 +277,7 @@ function checkEndConditions(game) {
     if (chasing) {
       game.status = 'caught';
       game.statusReason = 'The alarm went up — you were spotted.';
+      game.events.push('caught');
       return;
     }
   }
@@ -287,6 +289,7 @@ function checkEndConditions(game) {
     game.score += 500 + timeBonus + stealthBonus;
     game.status = 'level-complete';
     game.statusReason = `Level clear! +500, time bonus +${timeBonus}, stealth +${stealthBonus}.`;
+    game.events.push('level-complete');
   }
 }
 
@@ -295,10 +298,8 @@ export function updateGame(game, input, dt) {
   game.time += dt;
   game.flash = Math.max(0, game.flash - dt);
 
-  if (input.crouchPressed()) {
-    game.player.crouched = !game.player.crouched;
-  }
-
+  // Stance is owned by main.js: holding Shift sneaks, and C toggles a
+  // sneak latch. The engine only reads game.player.crouched.
   updatePlayer(game, input, dt);
   updateDetection(game, dt);
   updateNoise(game);
